@@ -12,7 +12,9 @@ $$    $$/ / $$   |    $$ |/$$/     $$    $$/
  
 organisation, statistics and display of data collected during pollen studies on IODP core U1478 
 
-includes a handy class for html creation
+includes handy class. e.g. for
+ * html creation 
+ * interpolation functions
 
 see results here: 
 [uni.camposcampos.de](https://uni.camposcampos.de/u1478/html/u1478.html)
