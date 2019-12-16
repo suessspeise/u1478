@@ -88,8 +88,10 @@ class FolderStructure:
 			("html", "html"),
 			("script", "script"),
 			("img", "img"),
+			("plot", "img/plot"),
 			("protocol", "protocol"),
 			("data", "data"),
+			("agedata", "data/age_data"),
 			("pollendata", "data/pollen"),
 			("agemodeldata", "data/agemodel")
 			]
@@ -329,6 +331,7 @@ class Container:
 class Html:
 	def __init__(self, title = ""):
 		self.content = []
+		self.addasciiart()
 		self.title = " - " + title
 
 	def __str__(self):
@@ -342,6 +345,7 @@ class Html:
 		for element in self.content:
 			html += '' + element + '\n' 
 			# html += '' + element.replace('\n','\n\t') + '\n' 
+		html += self.foot()
 		html += '\n</body>\n</html>'
 		return html
 
@@ -564,10 +568,11 @@ class Html:
 
 
 class CountingSummary:
-	def __init__(self, datacontainer, figurename="../img/plot/counting.png"):
+	def __init__(self, datacontainer, figurename="counting.png"):
 		self.dataset = datacontainer
-		self.figurename = figurename
-		self.figurename2 = "../img/plot/gap.png"
+		fs = FolderStructure()
+		self.figurename = fs.get("plot") + "/" + figurename
+		self.figurename2 = fs.get("plot") + "/" + "gap.png"
 		
 	def __str__(self):
 		return "counting summary for " + str(self.dataset)
@@ -616,7 +621,7 @@ class CountingSummary:
 		plt.title('Remaining gaps ' + "(" + str(datetime.datetime.now())[0:10] + ")")
 		plt.xlabel('Age [Ma]')
 		plt.ylabel('step size between samples [ka]')
-		g, a = pl.gaps()
+		g, a = self.gaps()
 		plt.scatter(g, a, color='red')
 		fig.savefig(self.figurename2, dpi=300)
 
@@ -682,8 +687,8 @@ class CountingSummary:
 		gaptext = "Biggest remaining gap around " + str(round(age, 3)) + "&thinsp;Ma (" + str(round(gap*1000, 3)) + "&thinsp;ka)"
 		picklist = self.picklist().to_html().replace('border="1"',' ')
 		# put into html object
-		html = Html()
-		html.addasciiart()
+		html = Html("Counting Summary")
+		html.addheadline("Counting Summary")
 		html.addparagraph(countingtext) 
 		html.addimage(self.figurename)
 		html.addparagraph("")
@@ -786,7 +791,6 @@ class SampleSummary:
 
 		# put into html object
 		html = Html("Sample " + str(self.id))
-		html.addasciiart()
 		html.addheadline("Sample " + str(self.id), weight=2)
 		html.addimage(self.barplotpath)
 		html.addheadline("Protocols")
@@ -809,6 +813,10 @@ class Interpolation:
 
 	stores a set of data points and constructs a function based on interpolation between those datapoints. Made for containing an age model.
 	'''
+	d = "dataframe with fixed points"
+	t = "list containing thresholds"
+	p = "list containing polynoms"
+
 	def __init__(self, dataframe):
 		''' constructor
 		
@@ -822,6 +830,7 @@ class Interpolation:
 			self.d = pd.DataFrame(dataframe).T
 		# sort
 		self.d = self.d.sort_values(self.d.columns[0]).reset_index(drop=True)
+		self.establish()
 
 	def __str__(self):
 		''' string
@@ -831,68 +840,69 @@ class Interpolation:
 		return 'Interpolation based on ' + str(self.d.shape[0]) + ' data points\n' + str(self.d)
 
 
+	def establish(self):
+		t, p = [], []
+		# start with 1(!) to allow acces element i-1
+		# polynom list is then 1 shorter than tie point list
+		# this makes sense as interpolation is always between two points 
+		for i in range(1, len(self.d[0])):
+			# assign two points
+			p1 = [self.d[0][i-1], self.d[0][i]]
+			p2 = [self.d[1][i-1], self.d[1][i]]
+			# generate polynom
+			coefficients = np.polyfit(p1, p2, 1)
+			polynom = np.poly1d(coefficients)
+			# put in list
+			t.append(p1[0])
+			p.append(polynom)
+		# act locally, then send back to mommy
+		self.t = t
+		self.p = p
+
 	def calc(self, x):
-		# in case of extrapolation the iterrows approach does not work 
-		# so first get values bigger than the biggest tie point
-		tail = self.d.tail(2).reset_index(drop=True)
-		if x > tail[0][0]:
-			# first grade polynom is straight line between two pints
-			p1 = [tail[0][0], tail[0][1]]
-			p2 = [tail[1][0], tail[1][1]]
-			coefficients = np.polyfit(p1, p2, 1) 
-			polynom = np.poly1d(coefficients)
-			return polynom(x)
-		# then values smaller than the smallest tie point
-		head = self.d.head(2).reset_index(drop=True)
-		if x < head[0][0]:
-			# first grade polynom is straight line between two pints
-			p1 = [head[0][0], head[0][1]]
-			p2 = [head[1][0], head[1][1]]
-			coefficients = np.polyfit(p1, p2, 1) 
-			polynom = np.poly1d(coefficients)
-			return polynom(x)
-		# every case in between data points
-		for i, row in self.d.iterrows():
-			if x <= row[0]:
-				p1 = [self.d[0][i-1], self.d[0][i]]
-				p2 = [self.d[1][i-1], self.d[1][i]]
-				coefficients = np.polyfit(p1, p2, 1)
-				polynom = np.poly1d(coefficients)
-				return polynom(x)
+		# if below lowest threshold:
+		if x <= self.t[0]:
+			return self.p[0](x)
+		# other cases must be higher than some threshold
+		# so we check them in (from highest to lowest)
+		else:
+			for i in reversed(range(len(self.t))):
+				if x > self.t[i]:
+					return self.p[i](x)
 
-
-class BashStuff:
-	#######################
-	##					 ##
-	## WORK IN PROGRESS! ##
-	##					 ##
-	#######################
-	def __init__(self):
-		pass
-
-	@staticmethod
-	def bash(bashCommand):
-		# based on advice found here: https://stackoverflow.com/questions/4256107/running-bash-commands-in-python
-		process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-		output, error = process.communicate() 
-
-	@staticmethod
-	def convertODS():
-		fs = FolderStructure()
-		bashCommand = "ssconvert " + fs.get("pollendata") + "/U1478_mastertable.ods " + fs.get("pollendata") + "/U1478.csv"
-		bash(bashCommand)
-		return 0
-##############################
-## 
-## separate specific behaviour from age model and plot
-## make general plot stuff and specific stuff
-## calculate differences and overlay / subplot onto plot
-##
-###############################
 
 class Agemodel(Interpolation):
-	figurename = "agemodel_nannofossil.png"
-	tie_points = [
+
+	figurename  = "unspecified_agemodel.png"
+	figuretitle = 'Age model for IODP site U1478'
+
+	def plotself(ax):
+		pass
+	
+	def plot(self, save=False):
+		f, ax = plt.subplots()
+		f.suptitle(self.figuretitle, fontsize=12)
+		f.gca().invert_yaxis()
+		
+		self.plotself(ax)
+
+		ax.axhspan(197.076, 256.745, color=cmap(1.0), alpha=0.5)
+		ax.set_xlabel('Age [Ma]')
+		ax.set_ylabel('Depth [m]')
+
+		if save: 
+			print('figure saved as "', self.figurename, '"')
+			f.savefig(self.figurename, dpi=300,)
+		else:
+			plt.show()
+
+
+class NanofossilAgemodel(Agemodel):
+
+	figurename  = "agemodel_nannofossil.png"
+	figuretitle = 'Age model for IODP site U1478\nbased on shipboard nanno fossils (Hall et al. 2017)'
+	
+	tie_points  = [
 		(175.42, 1.95, "T D. triradiatus"),
 		(203.59, 2.39, "T D. pentaradiatus"),
 		(205.78, 2.49, "T D. surculus"),
@@ -904,51 +914,195 @@ class Agemodel(Interpolation):
 		tiepoints = pd.DataFrame(self.tie_points).T
 		Interpolation.__init__(self, tiepoints)
 
-	def plot(self, save=False):
+
+	def plotself(self, ax, annotate=True):
 		resolution = 1000
 		x = np.linspace(170,270,resolution)
 		y = [self.calc(i) for i in x]
 
-		f, ax = plt.subplots()
 		# ax.plot(tie_points_np[1], tie_points_np[0])
-		ax.plot(y, x, color=cmap(0.0), zorder=1)
-		ax.scatter(self.d[1], self.d[0], color=cmap(0.5), zorder=2)
+		ax.plot(y, x, color=cmap(0.0), zorder=1, label="Hall et al. (2017)")
+		ax.scatter(self.d[1], self.d[0], color=cmap(0.15), zorder=2, label="Nanofossil tie points")
 
 		# labels
 		labels = [i[2] for i in self.tie_points]
 		pos_x  = [i[0] for i in self.tie_points]
 		pos_y  = [i[1] for i in self.tie_points]
 
-		for i in range(len(labels)):
-			ax.annotate(labels[i], (pos_y[i]+0.02, pos_x[i]-2), 
-				bbox=dict(boxstyle='round,pad=0.2', alpha=0.0),
-				fontsize=9)
+		if annotate:
+			for i in range(len(labels)):
+				ax.annotate(labels[i], 
+							(pos_y[i]+0.02, pos_x[i]-2), 
+							bbox=dict(boxstyle='round,pad=0.2', alpha=0.0),
+							fontsize=9)
 
-		ax.axhspan(197.076, 256.745, color=cmap(1.0), alpha=0.5)
-		f.gca().invert_yaxis()
-		ax.set_xlabel('Age [Ma]')
+
+class CyclostratigraphyAgemodel(Agemodel):
+
+	figurename  = "agemodel_cyclostratigraphy.png"
+	figuretitle = 'Age model for IODP site U1478\nbased on Cyclostratigraphy (Nakajima 2019)'
+	
+	datapath = '../data/age_data/cyclostrat_agemodel.csv'
+
+	def __init__(self):
+		tie_points = Container(self.datapath)
+		Interpolation.__init__(self, tie_points.d.T.reset_index(drop=True))
+
+	def plotself(self, ax):
+		resolution = 2000
+		x = np.linspace(170,270,resolution)
+		y = [self.calc(i) for i in x]
+
+		# ax.plot(tie_points_np[1], tie_points_np[0])
+		ax.plot(y, x, color=cmap(0.3), zorder=1, label="Nakajima (2019)")
+
+		# x = [i for i in self.d[0]]
+		# y = [i for i in self.d[1]]
+		# ax.scatter(y, x, color=cmap(0.3), zorder=1, label="Nakajima (2019)")
+
+
+class CompareAgemodel(Agemodel):
+
+	figurename = "agemodel_comparison.png"
+
+	def __init__(self):
+		self.figuretitle += '\nComparison'
+		self.cs = CyclostratigraphyAgemodel()
+		self.nf = NanofossilAgemodel()
+		fs = FolderStructure()
+		self.figurename = fs.get("plot") + "/" + self.figurename
+		print(self.figurename)
+
+
+	def diff(self):
+		# get the depths
+		data = Container()
+		depths = data.get("Bottom depth in composite core [cm]", "absolute")
+		points = data.get("SUM", "bool")
+		# only use those, that have a counting sum
+		datapoints = []
+		for i, sampleexistence in enumerate(points):
+			if sampleexistence:
+				datapoints.append(depths[i])
+		datapoints = [d / 100 for d in datapoints]
+
+		# set the ages	
+		# nf = [self.nf.calc(x) for x in datapoints]
+		age = [self.cs.calc(x) for x in datapoints]
+		# calculate difference
+		d = []
+		for i in datapoints:
+			nanno = self.nf.calc(i)
+			cyclo = self.cs.calc(i)
+			diffe = abs(nanno - cyclo)
+			d.append(diffe)
+
+		return (age, d)
+	
+
+	def plot(self, save=False):
+		f, (ax, diff) = plt.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+		ax.invert_yaxis()
+		# f.gca().invert_yaxis()
+
+		# calculate differences
+		age, difference = self.diff()
+
+		#diff.scatter(age, difference)
+		color     = 'grey'
+		linestyle = '-'
+		linewidth = 0.5
+		for a in age:
+			diff.axvline(a, color=color, linestyle=linestyle, linewidth=linewidth, zorder=0)
+			ax.axvline(  a, color=color, linestyle=linestyle, linewidth=linewidth, zorder=0)
+		
+
+		self.cs.plotself(ax)
+		self.nf.plotself(ax, annotate=False)
+
+		resolution = 2000
+		n = np.linspace(197,260,resolution)
+		x = [self.cs.calc(i) for i in n]
+		y = [abs(self.cs.calc(i) - self.nf.calc(i)) for i in n]
+		highest = max(y)
+		where = x[y.index(highest)]
+		print("Highest difference at", where, "Ma (", highest, "Ma)")
+		# diff.bar(age, difference, width=0.03)
+		diff.plot(x, y, color='r') 
+
+
+		# nice up and label
+		f.suptitle(self.figuretitle, fontsize=12)
+		# f.tight_layout()
+		ax.axhspan(197.076, 256.745, color=cmap(1.0), alpha=0.5, zorder=1)
 		ax.set_ylabel('Depth [m]')
-		f.suptitle('Age model for IODP site U1478\nbased on shipboard nanno fossils (Hall et al. 2017) ', fontsize=12)
+		ax.legend(framealpha=1.0)
+		diff.set_xlabel('Age [Ma]')
+		diff.set_ylabel('Difference\nAge [Ma]')
+		# spacing and dealing with overlap
+		plt.subplots_adjust(hspace = -0.2)  # move together
+		ax.set_xticks([]) #  remove ticks of upper plot
+		ax.spines['bottom'].set_visible(False) # hide plot border 
+		diff.spines['top'].set_visible(False)
+		diff.patch.set_alpha(0.0) #  make background transparent
+
 
 		if save: 
+			print('figure saved as "', self.figurename, '"')
 			f.savefig(self.figurename, dpi=300,)
 		else:
 			plt.show()
 
 
-gg = Agemodel()
+
+comp = CompareAgemodel()
+comp.plot(save=True)
+print("\n\n\n\n\n\n")
+
+neu = Html("Agemodel")
+neu.addheadline("Agemodel")
+neu.addimage("../img/plot/agemodel_comparison.png")
+neu.addparagraph("Highest difference at 2.830 Ma (136 ka)")
+neu.addlist(["why does kai not use nanno plancton dates as tie points?", 
+			 "why is kais age model linear on the shallower part (ca. until 208.63 m)?",
+			 "why does the cruise report not state error margins for the nanno plancton ages?",
+			 "should i look these up in the literature?"
+			 ])
+print(neu.generate())
+
+# CountingSummary(Container()).html("test.html")
+
+
+# gg = NanofossilAgemodel()
+# gg.establish()
+# print(200, gg.calc(200))
+# # gg.plot()
+
+# cg = CyclostratigraphyAgemodel()
+# # print(cg)
+# cg.establish()
+# print(200, cg.calc(200))
+# cg.plot()
+
+
+# # BashStuff.convertODS()
+
+# sevenup = Container()
+# seven = sevenup.get("SUM", "event")
+# print("7!!", seven[0])
+# nn = [gg.calc(x) for x in seven]
+# cc = [cg.calc(x) for x in seven]
+# diff = [nn[i] - cc[i] for i in range(len(seven))]
+# plt.scatter(seven, cc)
+# plt.show()
+
+
+
 # print(gg)
-
-
-x = np.linspace(160, 250, 500)
-y = [gg.calc(i) for i in x]
 
 # plt.scatter(gg.d[0], gg.d[1])
 # plt.plot(x, y)
 # plt.show()
-
-gg.plot()
-
 
 # probe = "a31f3w13"
 # probe = "d20f3w3"
@@ -964,6 +1118,28 @@ sys.exit("\n\nabort!")
 
 
 
+
+#######################
+##					 ##
+## WORK IN PROGRESS! ##
+##					 ##
+#######################
+class BashStuff:
+	def __init__(self):
+		pass
+
+	@staticmethod
+	def bash(bashCommand):
+		# based on advice found here: https://stackoverflow.com/questions/4256107/running-bash-commands-in-python
+		process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+		output, error = process.communicate() 
+
+	@staticmethod
+	def convertODS():
+		fs = FolderStructure()
+		bashCommand = "ssconvert " + fs.get("pollendata") + "/U1478_mastertable.ods " + fs.get("pollendata") + "/U1478.csv"
+		bash(bashCommand)
+		return 0
 
 
 
